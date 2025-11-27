@@ -8,49 +8,83 @@ import os
 import xlsxwriter
 
 # ==========================================
-# ⚙️ إعدادات الصفحة والتصميم
+# ⚙️ إعدادات الصفحة
 # ==========================================
+st.set_page_config(page_title="بوابة البيانات المركزية", layout="centered", page_icon="📇")
 
-st.set_page_config(page_title="نظام البيانات المركزي", layout="wide", page_icon="🗃️")
-
-# CSS لتحسين المظهر ودعم العربية وتصميم البطاقات
+# ==========================================
+# 🎨 التصميم الأنيق (CSS) - يدعم العربية والجداول
+# ==========================================
 st.markdown("""
 <style>
-    .main { direction: rtl; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    h1, h2, h3, p, div { text-align: right; }
-    .stDataFrame { direction: rtl; }
+    /* استيراد خط 'Cairo' الجميل من جوجل */
+    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
     
-    /* تصميم بطاقة المستفيد */
-    .card {
-        background-color: #ffffff;
+    /* تطبيق الخط على كامل الموقع */
+    html, body, [class*="css"] {
+        font-family: 'Cairo', sans-serif; 
+        direction: rtl;
+    }
+    
+    /* تنسيق بطاقة المستفيد */
+    .profile-card {
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.08); /* ظل ناعم */
+        overflow: hidden;
+        margin-top: 10px;
+        border: 1px solid #e0e0e0;
+    }
+    
+    /* رأس البطاقة الملون */
+    .card-header {
+        background: linear-gradient(135deg, #2E3192, #1BFFFF); /* لون متدرج أزرق سماوي */
         padding: 25px;
-        border-radius: 10px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        border-right: 6px solid #00d26a;
-        margin-bottom: 20px;
-        color: #333;
+        text-align: center;
+        color: white;
     }
-    .card h3 {
-        color: #2c3e50;
-        border-bottom: 1px solid #eee;
-        padding-bottom: 10px;
-        margin-bottom: 15px;
+    .card-header h2 { margin: 0; color: white; font-weight: 700; font-size: 24px; }
+    .card-header p { margin: 5px 0 0; opacity: 0.9; font-size: 14px; }
+    
+    /* جدول البيانات */
+    .info-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0;
     }
-    .card-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 8px 0;
-        border-bottom: 1px solid #f9f9f9;
+    .info-table tr {
+        border-bottom: 1px solid #f0f0f0;
+        transition: background 0.2s;
     }
-    .card-label {
-        font-weight: bold;
+    .info-table tr:hover { background-color: #f9f9f9; }
+    .info-table tr:last-child { border-bottom: none; }
+    
+    .info-table td {
+        padding: 15px 20px;
+        font-size: 16px;
+    }
+    
+    /* عمود العناوين (يمين) */
+    .label-cell {
+        font-weight: 700;
         color: #555;
-        margin-left: 10px;
+        width: 35%;
+        background-color: #fafafa;
+        border-left: 1px solid #eee;
     }
-    .card-value {
+    /* عمود القيم (يسار) */
+    .value-cell {
         color: #000;
-        font-weight: 500;
-        text-align: left;
+        font-weight: 600;
+        width: 65%;
+    }
+    
+    /* تنسيق زر التحقق */
+    .stButton button {
+        background-color: #2E3192;
+        color: white;
+        border-radius: 8px;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -58,175 +92,161 @@ st.markdown("""
 # ==========================================
 # 🔐 الاتصال بقاعدة البيانات (Render Environment Variables)
 # ==========================================
-
 try:
-    # جلب المتغيرات من إعدادات السيرفر
     MONGO_URI = os.environ.get("MONGO_URI")
-    USER_PASSWORD = os.environ.get("USER_PASSWORD")   # كلمة المرور الموحدة للمستفيدين
-    ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") # كلمة مرور لوحة التحكم
-
-    # التحقق من وجود المتغيرات
-    if not MONGO_URI or not USER_PASSWORD or not ADMIN_PASSWORD:
-        st.error("⚠️ خطأ في الإعدادات: لم يتم العثور على Environment Variables في Render.")
-        st.info("تأكد من إضافة: MONGO_URI, USER_PASSWORD, ADMIN_PASSWORD في لوحة تحكم Render.")
+    USER_PASSWORD = os.environ.get("USER_PASSWORD")
+    ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+    
+    if not MONGO_URI:
+        st.warning("⚠️ إعدادات الاتصال غير موجودة في Render Variables.")
         st.stop()
 
-    # الاتصال الفعلي
     client = pymongo.MongoClient(MONGO_URI, tlsCAFile=certifi.where())
     db = client["BeneficiaryDB"]
     collection = db["Profiles"]
 
 except Exception as e:
-    st.error(f"حدث خطأ فادح في الاتصال بقاعدة البيانات: {e}")
+    st.error(f"خطأ في الاتصال: {e}")
     st.stop()
 
 # ==========================================
-# 🚦 توجيه النظام (Routing Logic)
+# 🚦 توجيه الصفحات (Logic)
 # ==========================================
-
-# قراءة الباراميترز من الرابط لمعرفة هل هو زائر (id) أم مدير
 query_params = st.query_params
 
 # ---------------------------------------------------------
-# السيناريو الأول: واجهة المستفيد (عند وجود ID في الرابط)
+# الحالة 1: عرض البطاقة (للمستفيد)
 # ---------------------------------------------------------
 if "id" in query_params:
     user_id = query_params["id"]
     
-    # عنوان بسيط في المنتصف
-    st.markdown("<h2 style='text-align: center;'>🔐 بوابة الوصول للبيانات</h2>", unsafe_allow_html=True)
-    st.markdown("---")
-    
-    # وضع حقل الإدخال في المنتصف لتنسيق أجمل
+    # واجهة إدخال الرمز بتصميم بسيط في الوسط
+    st.markdown("<br>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 2, 1])
+    
     with col2:
-        password_input = st.text_input("أدخل رمز الوصول الموحد:", type="password")
-        
-        if st.button("عرض البطاقة 📄", use_container_width=True):
-            if password_input == USER_PASSWORD:
-                try:
-                    # البحث عن المستفيد بواسطة الـ ID
-                    doc = collection.find_one({"_id": ObjectId(user_id)})
+        st.markdown("<h4 style='text-align: center; color: #666;'>🔒 الوصول الآمن</h4>", unsafe_allow_html=True)
+        password_input = st.text_input("أدخل رمز الوصول:", type="password", label_visibility="collapsed", placeholder="أدخل الرمز هنا...")
+        check_btn = st.button("عرض البطاقة", use_container_width=True)
+
+    if check_btn:
+        if password_input == USER_PASSWORD:
+            try:
+                # البحث عن البيانات
+                doc = collection.find_one({"_id": ObjectId(user_id)})
+                if doc:
+                    # اختيار الاسم للعنوان
+                    name = doc.get('الاسم', doc.get('الاسم_عربي', doc.get('name', 'تفاصيل المستفيد')))
                     
-                    if doc:
-                        st.success("✅ تم التحقق بنجاح")
-                        
-                        # تجهيز البيانات للعرض (HTML)
-                        # نحاول تخمين اسم الشخص للعنوان، إذا لم يوجد نكتب "مستفيد"
-                        name_display = doc.get('الاسم', doc.get('الاسم_عربي', doc.get('name', 'بيانات المستفيد')))
-                        
-                        html_card = f"""
-                        <div class="card">
-                            <h3>👤 {name_display}</h3>
-                        """
-                        
-                        # عرض جميع الحقول ما عدا ID
-                        ignore_keys = ['_id']
-                        for k, v in doc.items():
-                            if k not in ignore_keys and str(v).lower() != 'nan':
-                                html_card += f"""
-                                <div class="card-row">
-                                    <span class="card-label">{k}:</span>
-                                    <span class="card-value">{v}</span>
-                                </div>
-                                """
-                        
-                        html_card += "</div>"
-                        st.markdown(html_card, unsafe_allow_html=True)
-                        
-                    else:
-                        st.error("❌ عذراً، هذا السجل غير موجود في قاعدة البيانات.")
-                except Exception as e:
-                    st.error("❌ الرابط يحتوي على معرف غير صالح.")
-            else:
-                if password_input:
-                    st.error("❌ رمز الوصول غير صحيح، حاول مرة أخرى.")
+                    # --- بناء البطاقة HTML ---
+                    html_content = f"""
+                    <div class="profile-card">
+                        <div class="card-header">
+                            <h2>{name}</h2>
+                            <p>وثيقة تعريفية رقمية</p>
+                        </div>
+                        <table class="info-table">
+                    """
+                    
+                    # تصفية الحقول (استبعاد الإدارية والفارغة)
+                    ignore_list = ['_id', 'qr_code']
+                    
+                    for key, value in doc.items():
+                        if key not in ignore_list and str(value).lower() != 'nan':
+                            html_content += f"""
+                            <tr>
+                                <td class="label-cell">{key}</td>
+                                <td class="value-cell">{value}</td>
+                            </tr>
+                            """
+                    
+                    html_content += """
+                        </table>
+                        <div style="text-align:center; padding: 15px; color: #aaa; font-size: 12px; background: #fdfdfd;">
+                            تم إنشاء هذه البطاقة عبر النظام المركزي
+                        </div>
+                    </div>
+                    """
+                    
+                    st.markdown(html_content, unsafe_allow_html=True)
+                else:
+                    st.error("❌ عذراً، هذا السجل غير موجود.")
+            except:
+                st.error("❌ رابط غير صالح.")
+        else:
+            if password_input:
+                st.error("⛔ الرمز غير صحيح.")
 
 # ---------------------------------------------------------
-# السيناريو الثاني: لوحة تحكم الإدارة (بدون ID)
+# الحالة 2: لوحة التحكم (للأدمن)
 # ---------------------------------------------------------
 else:
-    st.title("🛠️ لوحة التحكم والإدارة")
+    st.markdown("<h2 style='text-align: right;'>🛠️ لوحة التحكم والإدارة</h2>", unsafe_allow_html=True)
     st.markdown("---")
     
-    # القائمة الجانبية لتسجيل دخول المدير
+    # قائمة جانبية للدخول
     with st.sidebar:
         st.header("🔐 دخول الإدارة")
-        admin_pass_input = st.text_input("كلمة مرور المدير:", type="password")
+        admin_pass_input = st.text_input("كلمة المرور:", type="password")
         
-    # التحقق من كلمة مرور المدير
     if admin_pass_input == ADMIN_PASSWORD:
-        st.success("مرحباً بك في النظام الإداري 👋")
+        st.success("أهلاً بك في النظام الإداري 👋")
         
-        # 1. جلب كافة البيانات من القاعدة
-        # نستخدم list() لتحويل المؤشر إلى قائمة، ثم لـ DataFrame
+        # جلب البيانات
         cursor = collection.find()
         data_list = list(cursor)
         
         if len(data_list) > 0:
             df = pd.DataFrame(data_list)
+            # معالجة ID
+            if '_id' in df.columns: df['_id'] = df['_id'].astype(str)
             
-            # تحويل عمود _id إلى نص لتجنب مشاكل العرض
-            if '_id' in df.columns:
-                df['_id'] = df['_id'].astype(str)
+            # --- الفلترة والبحث ---
+            st.markdown("### 🔍 تصفية البيانات")
+            c1, c2 = st.columns(2)
             
-            # --- 2. قسم الفلترة والبحث ---
-            st.markdown("### 🔍 أدوات التصفية")
+            with c1:
+                search_query = st.text_input("بحث شامل (اسم، هوية...):")
             
-            col_filter1, col_filter2 = st.columns(2)
-            
-            with col_filter1:
-                search_term = st.text_input("🔎 بحث شامل (اسم، رقم، هوية...):")
-            
-            with col_filter2:
-                # محاولة ذكية لاكتشاف عمود "الماسح" أو "الموظف"
-                possible_scanner_cols = [c for c in df.columns if any(x in c for x in ['ماسح', 'موظف', 'جامع', 'user'])]
-                
+            with c2:
+                # البحث عن عمود الماسح تلقائياً
                 scanner_col = None
-                if possible_scanner_cols:
-                    scanner_col = possible_scanner_cols[0] # نأخذ أول عمود نجده
-                    unique_scanners = ["الكل"] + list(df[scanner_col].unique())
-                    selected_scanner = st.selectbox(f"تصفية حسب ({scanner_col}):", unique_scanners)
+                possible_cols = [c for c in df.columns if any(x in c for x in ['ماسح', 'موظف', 'جامع', 'مستخدم'])]
+                if possible_cols:
+                    scanner_col = possible_cols[0]
+                    scanners = ["الكل"] + list(df[scanner_col].unique())
+                    selected_scanner = st.selectbox(f"تصفية حسب ({scanner_col}):", scanners)
                 else:
                     selected_scanner = "الكل"
-                    st.info("لم يتم العثور على عمود باسم 'ماسح' أو 'موظف' للفلترة التلقائية.")
 
-            # تطبيق الفلاتر على البيانات
+            # تطبيق الفلاتر
             filtered_df = df.copy()
-            
-            # 1. فلترة الماسح
             if scanner_col and selected_scanner != "الكل":
                 filtered_df = filtered_df[filtered_df[scanner_col] == selected_scanner]
             
-            # 2. فلترة البحث النصي
-            if search_term:
-                # دالة للبحث في كل الأعمدة
-                mask = filtered_df.astype(str).apply(lambda x: x.str.contains(search_term, case=False)).any(axis=1)
+            if search_query:
+                mask = filtered_df.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)
                 filtered_df = filtered_df[mask]
 
-            # --- 3. عرض النتائج ---
-            st.markdown(f"#### 📊 النتائج: {len(filtered_df)} سجل")
+            # --- العرض والتصدير ---
+            st.markdown(f"**عدد السجلات:** {len(filtered_df)}")
             st.dataframe(filtered_df, use_container_width=True)
             
-            # --- 4. التصدير (Export) ---
-            st.markdown("### 📥 العمليات")
-            
-            # تحويل البيانات المفلترة إلى Excel في الذاكرة
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # زر التحميل
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                 filtered_df.to_excel(writer, index=False, sheet_name='Data')
             
             st.download_button(
-                label="تحميل البيانات المعروضة (Excel)",
-                data=output.getvalue(),
+                label="📥 تحميل النتائج (Excel)",
+                data=buffer.getvalue(),
                 file_name="Filtered_Data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-            
         else:
-            st.warning("📭 قاعدة البيانات فارغة، لا توجد سجلات حتى الآن.")
+            st.info("لا توجد بيانات حالياً.")
             
     elif admin_pass_input:
-        st.error("⛔ كلمة مرور الإدارة غير صحيحة!")
+        st.error("كلمة المرور غير صحيحة.")
     else:
-        st.info("⬅️ الرجاء تسجيل الدخول من القائمة الجانبية للوصول للبيانات.")
+        st.info("الرجاء تسجيل الدخول من القائمة الجانبية.")
