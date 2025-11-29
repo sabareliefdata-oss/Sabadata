@@ -4,3 +4,6 @@ pymongo
 certifi
 openpyxl
 xlsxwriter
+opencv-python-headless
+numpy
+Pillow
