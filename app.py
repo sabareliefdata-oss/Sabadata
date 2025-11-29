@@ -6,11 +6,13 @@ from bson.objectid import ObjectId
 import io
 import os
 import xlsxwriter
+from datetime import datetime
+import time
 
 # ==========================================
 # ⚙️ Page Configuration
 # ==========================================
-st.set_page_config(page_title="Data Portal", layout="centered", page_icon="📇")
+st.set_page_config(page_title="Data Portal", layout="wide", page_icon="📇")
 
 # ==========================================
 # 🎨 Design & CSS (Global English LTR)
@@ -23,7 +25,7 @@ st.markdown("""
     /* Apply Font & Direction Globally */
     html, body, [class*="css"] {
         font-family: 'Cairo', sans-serif; 
-        direction: ltr;  /* Left to Right */
+        direction: ltr; 
         text-align: left;
     }
     
@@ -83,15 +85,13 @@ st.markdown("""
         padding: 12px 15px;
     }
     
-    /* Input Alignment */
-    .stTextInput input {
-        text-align: center;
-    }
+    /* Status Messages */
+    .success-box { padding: 20px; background-color: #d4edda; color: #155724; border-radius: 10px; text-align: center; margin-bottom: 10px; border: 1px solid #c3e6cb; }
+    .error-box { padding: 20px; background-color: #f8d7da; color: #721c24; border-radius: 10px; text-align: center; margin-bottom: 10px; border: 1px solid #f5c6cb; }
     
-    /* Button Styling */
-    .stButton button {
-        font-weight: bold;
-    }
+    /* Input Alignment */
+    .stTextInput input { text-align: center; }
+    .stButton button { font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -109,7 +109,8 @@ try:
 
     client = pymongo.MongoClient(MONGO_URI, tlsCAFile=certifi.where())
     db = client["BeneficiaryDB"]
-    collection = db["Profiles"]
+    collection = db["Profiles"]       # الكروت
+    transactions = db["Transactions"] # سجل الصرف الجديد
 
 except Exception as e:
     st.error(f"Database Connection Error: {e}")
@@ -121,7 +122,7 @@ except Exception as e:
 query_params = st.query_params
 
 # ---------------------------------------------------------
-# Scenario 1: Beneficiary View (ID exists in URL)
+# Scenario 1: Beneficiary View (ID exists in URL) - للعرض فقط
 # ---------------------------------------------------------
 if "id" in query_params:
     user_id = query_params["id"]
@@ -139,18 +140,14 @@ if "id" in query_params:
             try:
                 doc = collection.find_one({"_id": ObjectId(user_id)})
                 if doc:
-                    # Priority for English Name
                     name_display = doc.get('enname', doc.get('en_name', doc.get('Name', doc.get('arname', 'Beneficiary Details'))))
                     
-                    # Build HTML Rows
                     html_rows = ""
                     ignore_list = ['_id', 'qr_code']
-                    
                     for key, value in doc.items():
                         if key not in ignore_list and str(value).lower() != 'nan':
                             html_rows += f"""<tr><td class="label-cell">{key}</td><td class="value-cell">{value}</td></tr>"""
                     
-                    # Assemble Full Card
                     full_card_html = f"""
                     <div class="profile-card">
                         <div class="card-header">
@@ -167,7 +164,7 @@ if "id" in query_params:
                     """
                     st.markdown(full_card_html, unsafe_allow_html=True)
                 else:
-                    st.error("❌ Record not found in database.")
+                    st.error("❌ Record not found.")
             except:
                 st.error("❌ Invalid Link ID.")
         else:
@@ -175,75 +172,186 @@ if "id" in query_params:
                 st.error("⛔ Incorrect Access Code.")
 
 # ---------------------------------------------------------
-# Scenario 2: Admin Dashboard (No ID)
+# Scenario 2: Admin & Distributor Dashboard (No ID)
 # ---------------------------------------------------------
 else:
-    st.markdown("<h2 style='text-align: left;'>🛠️ Admin Dashboard</h2>", unsafe_allow_html=True)
-    st.markdown("---")
-    
     # Sidebar Login
     with st.sidebar:
-        st.header("🔐 Admin Login")
-        admin_pass_input = st.text_input("Password:", type="password")
+        st.header("🔐 System Login")
+        login_pass = st.text_input("Enter Password:", type="password")
         
-    if admin_pass_input == ADMIN_PASSWORD:
-        st.success("Welcome Back, Admin 👋")
+    if login_pass == ADMIN_PASSWORD:
+        st.sidebar.success("✅ Logged in as Admin")
         
-        # Fetch Data
-        cursor = collection.find()
-        data_list = list(cursor)
+        # --- Tabs for Navigation ---
+        tab1, tab2, tab3 = st.tabs(["🚀 Distribution Point (Scanner)", "📊 Dashboard & Reports", "🗃️ Beneficiary Data"])
         
-        if len(data_list) > 0:
-            df = pd.DataFrame(data_list)
-            if '_id' in df.columns: df['_id'] = df['_id'].astype(str)
+        # =================================================
+        # TAB 1: DISTRIBUTION SCANNER (واجهة الصرف)
+        # =================================================
+        with tab1:
+            st.markdown("### 📦 Distribution Scanner")
+            st.info("Setup the session, then start scanning.")
             
-            # Filter Tools
-            st.markdown("### 🔍 Filter & Search")
-            c1, c2 = st.columns(2)
-            
+            # 1. Session Setup
+            c1, c2, c3 = st.columns(3)
             with c1:
-                search_query = st.text_input("Global Search (Name, ID, etc.):")
-            
+                project_name = st.text_input("Project Name", value="Ramadan 2025")
             with c2:
-                # Intelligent column detection for Scanner/User
-                scanner_col = None
-                possible_cols = [c for c in df.columns if any(x in c.lower() for x in ['surveyor', 'scanner', 'user', 'ماسح', 'موظف'])]
+                location = st.selectbox("Distribution Location", ["Warehouse A", "Warehouse B", "Field Point", "Home Visit", "Merchant"])
+            with c3:
+                distributor_name = st.text_input("Distributor Name")
+            
+            st.divider()
+            
+            if project_name and location and distributor_name:
+                # 2. Scanning Area
+                st.markdown("#### 📷 Scan QR Code")
                 
-                if possible_cols:
-                    scanner_col = possible_cols[0]
-                    scanners = ["All"] + list(df[scanner_col].unique())
-                    selected_scanner = st.selectbox(f"Filter by ({scanner_col}):", scanners)
-                else:
-                    selected_scanner = "All"
+                # Input for Scanner (Acts as keyboard input or camera paste)
+                # Note: On mobile, user clicks field -> keyboard camera icon -> scans QR -> URL pasted here.
+                scanned_data = st.text_input("Click here and scan QR:", key="scanner_input", help="Scan the QR code. The system will extract the ID.")
+                
+                if scanned_data:
+                    # Logic to extract ID from URL (e.g., https://.../?id=12345)
+                    try:
+                        if "id=" in scanned_data:
+                            extracted_id = scanned_data.split("id=")[1].split("&")[0].strip()
+                        else:
+                            extracted_id = scanned_data.strip() # If they scanned just the ID
+                        
+                        # Check Validity
+                        if len(extracted_id) < 10: # Basic validation
+                             st.warning("⚠️ Invalid QR format.")
+                        else:
+                            # 3. Process Transaction
+                            # A. Check if user exists in Profiles
+                            beneficiary = collection.find_one({"_id": ObjectId(extracted_id)})
+                            
+                            if not beneficiary:
+                                st.markdown(f'<div class="error-box"><h1>⚠️ UNKNOWN</h1><p>Beneficiary not found in database.</p></div>', unsafe_allow_html=True)
+                            
+                            else:
+                                # B. Check for Duplicates (Double Dipping)
+                                existing_trans = transactions.find_one({"beneficiary_id": extracted_id, "project_name": project_name})
+                                
+                                if existing_trans:
+                                    # ALREADY RECEIVED
+                                    rec_time = existing_trans.get('timestamp').strftime("%Y-%m-%d %H:%M:%S")
+                                    rec_loc = existing_trans.get('location')
+                                    rec_by = existing_trans.get('distributor')
+                                    
+                                    st.markdown(f"""
+                                    <div class="error-box">
+                                        <h1>❌ ALREADY RECEIVED</h1>
+                                        <h3>Double Dipping Detected!</h3>
+                                        <hr>
+                                        <p><b>Time:</b> {rec_time}</p>
+                                        <p><b>Location:</b> {rec_loc}</p>
+                                        <p><b>By:</b> {rec_by}</p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                    
+                                    # Show Beneficiary Details for verification
+                                    st.write(f"**Name:** {beneficiary.get('enname', beneficiary.get('arname', ''))}")
+                                    
+                                else:
+                                    # C. Success - Record Transaction
+                                    new_trans = {
+                                        "beneficiary_id": extracted_id,
+                                        "beneficiary_name": beneficiary.get('enname', beneficiary.get('arname', 'Unknown')),
+                                        "project_name": project_name,
+                                        "location": location,
+                                        "distributor": distributor_name,
+                                        "timestamp": datetime.now(),
+                                        "status": "Received"
+                                    }
+                                    transactions.insert_one(new_trans)
+                                    
+                                    st.markdown(f"""
+                                    <div class="success-box">
+                                        <h1>✅ SUCCESS</h1>
+                                        <h3>Marked as Received</h3>
+                                        <h1>{beneficiary.get('enname', beneficiary.get('arname', ''))}</h1>
+                                        <p>Family Members: {beneficiary.get('NO of family members', 'N/A')}</p>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                    
+                    except Exception as e:
+                        st.error(f"Scanning Error: {e}")
 
-            # Apply Filters
-            filtered_df = df.copy()
-            if scanner_col and selected_scanner != "All":
-                filtered_df = filtered_df[filtered_df[scanner_col] == selected_scanner]
-            
-            if search_query:
-                mask = filtered_df.astype(str).apply(lambda x: x.str.contains(search_query, case=False)).any(axis=1)
-                filtered_df = filtered_df[mask]
+            else:
+                st.warning("⚠️ Please fill Project, Location, and Name to start scanning.")
 
-            # Display Results
-            st.markdown(f"**Total Results:** {len(filtered_df)}")
-            st.dataframe(filtered_df, use_container_width=True)
+        # =================================================
+        # TAB 2: REPORTS & TRANSACTIONS (تقارير الصرف)
+        # =================================================
+        with tab2:
+            st.markdown("### 📊 Distribution Reports")
             
-            # Export
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                filtered_df.to_excel(writer, index=False, sheet_name='Data')
+            # Fetch Transactions
+            trans_cursor = transactions.find()
+            trans_list = list(trans_cursor)
             
-            st.download_button(
-                label="📥 Download Excel",
-                data=buffer.getvalue(),
-                file_name="Exported_Data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-        else:
-            st.info("Database is currently empty.")
+            if len(trans_list) > 0:
+                df_trans = pd.DataFrame(trans_list)
+                df_trans['_id'] = df_trans['_id'].astype(str)
+                df_trans['timestamp'] = pd.to_datetime(df_trans['timestamp'])
+                
+                # Filters
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    f_project = st.selectbox("Filter by Project:", ["All"] + list(df_trans['project_name'].unique()))
+                with c2:
+                    f_loc = st.selectbox("Filter by Location:", ["All"] + list(df_trans['location'].unique()))
+                with c3:
+                    f_user = st.selectbox("Filter by Distributor:", ["All"] + list(df_trans['distributor'].unique()))
+                
+                # Apply Filters
+                df_view = df_trans.copy()
+                if f_project != "All": df_view = df_view[df_view['project_name'] == f_project]
+                if f_loc != "All": df_view = df_view[df_view['location'] == f_loc]
+                if f_user != "All": df_view = df_view[df_view['distributor'] == f_user]
+                
+                # Stats
+                st.markdown(f"**Total Distributed:** `{len(df_view)}` baskets")
+                
+                # Table
+                st.dataframe(df_view[['timestamp', 'beneficiary_name', 'location', 'distributor', 'project_name']], use_container_width=True)
+                
+                # Export
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    df_view.to_excel(writer, index=False, sheet_name='Transactions')
+                
+                st.download_button("📥 Download Report (Excel)", buffer.getvalue(), "Distribution_Report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                
+            else:
+                st.info("No distribution records yet.")
+
+        # =================================================
+        # TAB 3: BENEFICIARY DATA (بيانات المستفيدين الأصلية)
+        # =================================================
+        with tab3:
+            st.markdown("### 🗃️ All Beneficiaries Database")
             
-    elif admin_pass_input:
-        st.error("Incorrect Admin Password.")
+            cursor = collection.find()
+            data_list = list(cursor)
+            
+            if len(data_list) > 0:
+                df = pd.DataFrame(data_list)
+                if '_id' in df.columns: df['_id'] = df['_id'].astype(str)
+                
+                search_q = st.text_input("Search Beneficiary:")
+                if search_q:
+                    mask = df.astype(str).apply(lambda x: x.str.contains(search_q, case=False)).any(axis=1)
+                    df = df[mask]
+                
+                st.dataframe(df, use_container_width=True)
+            else:
+                st.write("Database Empty")
+
+    elif login_pass:
+        st.error("Incorrect Password")
     else:
-        st.info("Please login from the sidebar to access the dashboard.")
+        st.info("Please enter Admin Password to access the system.")
