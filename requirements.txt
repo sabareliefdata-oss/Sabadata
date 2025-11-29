@@ -7,3 +7,4 @@ xlsxwriter
 opencv-python-headless
 numpy
 Pillow
+pymupdf
