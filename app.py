@@ -9,6 +9,7 @@ import xlsxwriter
 from datetime import datetime
 import streamlit.components.v1 as components
 import time
+import re  # <--- مكتبة جديدة للبحث الذكي عن الـ ID
 
 # ==========================================
 # ⚙️ Page Configuration
@@ -38,10 +39,8 @@ st.markdown("""
     .success { background-color: #d1e7dd; color: #0f5132; border: 2px solid #badbcc; }
     .error { background-color: #f8d7da; color: #842029; border: 2px solid #f5c2c7; }
     
-    /* تكبير حقل المسح للتركيز */
     .stTextInput input { text-align: center; font-size: 22px; font-weight: bold; border: 3px solid #004e92; color: #004e92; }
     
-    /* تصميم العدادات */
     .metric-card { background: #f8f9fa; padding: 15px; border-radius: 10px; border-left: 5px solid #004e92; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
     .metric-value { font-size: 24px; color: #333; font-weight: bold; }
     
@@ -63,7 +62,7 @@ try:
     db = client["BeneficiaryDB"]
     collection = db["Profiles"]       
     transactions = db["Transactions"]
-    inventory_db = db["Inventory"]   # جدول جديد للمخزون الدائم
+    inventory_db = db["Inventory"]
 
 except: st.stop()
 
@@ -72,20 +71,17 @@ except: st.stop()
 # ==========================================
 def get_projects_list():
     try:
-        # البحث عن اسم العمود بغض النظر عن حالة الأحرف
         sample = collection.find_one()
         proj_col = next((k for k in sample.keys() if 'project' in k.lower() or 'مشروع' in k), None)
         if proj_col:
             return [p for p in collection.distinct(proj_col) if p]
     except: pass
-    return ["Ramadan 2025"] # افتراضي
+    return ["Ramadan 2025"]
 
 def get_surveyor_column(df):
-    # البحث عن عمود الماسح الميداني
     return next((c for c in df.columns if any(x in c.lower() for x in ['surveyor', 'ماسح', 'field'])), None)
 
 def update_stock_db(project, location, qty):
-    # تحديث المخزون في قاعدة البيانات ليكون دائم
     inventory_db.update_one(
         {"project": project, "location": location},
         {"$set": {"initial_qty": qty, "last_updated": datetime.now()}},
@@ -93,12 +89,11 @@ def update_stock_db(project, location, qty):
     )
 
 def get_stock_db(project, location):
-    # جلب المخزون من القاعدة
     rec = inventory_db.find_one({"project": project, "location": location})
     return rec.get("initial_qty", 0) if rec else 0
 
 def process_scan():
-    """معالجة المسح التلقائي"""
+    """معالجة المسح الذكي باستخدام Regex"""
     scanned_text = st.session_state.scanner_input
     if not scanned_text: return
     
@@ -106,12 +101,16 @@ def process_scan():
     st.session_state.scanner_input = "" 
     
     try:
-        if "id=" in scanned_text:
-            extracted_id = scanned_text.split("id=")[1].split("&")[0].strip()
+        # --- التعديل الجوهري هنا ---
+        # استخدام Regex للبحث عن نمط ObjectId (24 حرف hex)
+        # هذا سيتجاهل أي روابط أو نصوص زائدة ويستخرج الـ ID فقط
+        match = re.search(r'[0-9a-fA-F]{24}', scanned_text)
+        
+        if match:
+            extracted_id = match.group(0)
         else:
-            extracted_id = scanned_text.strip()
-            
-        if len(extracted_id) < 10: return
+            st.session_state.scan_result = {"type": "error", "msg": "INVALID QR", "details": "No valid ID found in scan."}
+            return
 
         # البحث عن المستفيد
         beneficiary = collection.find_one({"_id": ObjectId(extracted_id)})
@@ -185,12 +184,11 @@ else:
         tab1, tab2 = st.tabs(["🚀 SCANNER (الصرف)", "📊 FULL REPORTS (التقارير الشاملة)"])
 
         # ==========================================
-        # TAB 1: SCANNER & INVENTORY (Persistent)
+        # TAB 1: SCANNER & INVENTORY
         # ==========================================
         with tab1:
             st.markdown("### 📦 Distribution Point")
             
-            # 1. إعدادات الجلسة والمخزون
             with st.expander("⚙️ Session & Stock Settings", expanded=True):
                 c1, c2, c3 = st.columns(3)
                 with c1: 
@@ -200,13 +198,11 @@ else:
                 with c3: 
                     st.text_input("Distributor Name:", key="s_dist")
                 
-                # جلب المخزون المحفوظ في القاعدة
                 current_db_stock = get_stock_db(sel_proj, sel_loc)
                 
                 st.divider()
                 c_stock, c_btn, c_info = st.columns([1, 1, 2])
                 with c_stock:
-                    # نستخدم session_state لضبط القيمة الافتراضية مرة واحدة
                     if 'stock_val' not in st.session_state or st.session_state.get('last_loc') != sel_loc:
                          st.session_state.stock_val = current_db_stock
                          st.session_state.last_loc = sel_loc
@@ -214,7 +210,7 @@ else:
                     new_stock = st.number_input("📦 Set Initial Stock:", min_value=0, value=st.session_state.stock_val, step=1, key="input_stock")
                 
                 with c_btn:
-                    st.write("") # Spacer
+                    st.write("")
                     st.write("") 
                     if st.button("💾 Save Stock to DB"):
                         update_stock_db(sel_proj, sel_loc, new_stock)
@@ -223,9 +219,7 @@ else:
                         st.rerun()
 
                 with c_info:
-                    # حساب المتبقي الحقيقي من القاعدة
                     distributed_count = transactions.count_documents({"project_name": sel_proj, "location": sel_loc})
-                    # نستخدم القيمة المحفوظة في القاعدة كمرجع
                     saved_initial = get_stock_db(sel_proj, sel_loc)
                     remaining = saved_initial - distributed_count
                     
@@ -238,7 +232,6 @@ else:
 
             st.divider()
 
-            # 2. منطقة المسح السريع
             if "scan_result" in st.session_state:
                 res = st.session_state.scan_result
                 st.markdown(f"""<div class="status-box {res['type']}"><h1 style="margin:0;">{res['msg']}</h1><p>{res['details']}</p></div>""", unsafe_allow_html=True)
@@ -246,8 +239,6 @@ else:
             # حقل المسح
             st.text_input("Click here & Scan:", key="scanner_input", on_change=process_scan)
             
-            # --- 🔥 AUTO FOCUS HACK (Javascript) 🔥 ---
-            # هذا الكود يجبر المؤشر على العودة للحقل بعد كل عملية
             components.html(f"""
                 <script>
                     var input = window.parent.document.querySelector("input[type=text]");
@@ -256,19 +247,17 @@ else:
             """, height=0)
 
         # ==========================================
-        # TAB 2: ADVANCED REPORTS (FULL DATA MERGE)
+        # TAB 2: ADVANCED REPORTS
         # ==========================================
         with tab2:
             st.markdown("### 📊 Advanced Data Reports")
             if st.button("🔄 Refresh Report Data"): pass
             
-            # 1. جلب كل عمليات الصرف
             trans_list = list(transactions.find())
             
             if len(trans_list) > 0:
                 df_trans = pd.DataFrame(trans_list)
                 
-                # تحسين الفلاتر
                 all_locs = ["All"] + list(df_trans['location'].unique())
                 all_dists = ["All"] + list(df_trans['distributor'].unique())
                 
@@ -277,7 +266,6 @@ else:
                 with fr2: f_loc = st.selectbox("Location:", all_locs, key="rp_loc")
                 with fr3: f_dist = st.selectbox("Distributor:", all_dists, key="rp_dist")
                 
-                # تطبيق الفلترة الأولية على الصرف
                 if f_proj != "All": df_trans = df_trans[df_trans['project_name'] == f_proj]
                 if f_loc != "All": df_trans = df_trans[df_trans['location'] == f_loc]
                 if f_dist != "All": df_trans = df_trans[df_trans['distributor'] == f_dist]
@@ -285,20 +273,15 @@ else:
                 st.divider()
                 
                 if not df_trans.empty:
-                    st.info("⏳ Merging data with original beneficiaries database... please wait.")
+                    st.info("⏳ Merging data... please wait.")
                     
-                    # 2. جلب بيانات المستفيدين (Merge)
-                    # نجمع كل الـ IDs من عمليات الصرف المفلترة
                     beneficiary_ids = [ObjectId(bid) for bid in df_trans['beneficiary_id'].unique()]
-                    
-                    # نجلب بيانات هؤلاء الأشخاص فقط من جدول Profiles (أسرع من جلب الكل)
                     profiles_cursor = collection.find({"_id": {"$in": beneficiary_ids}})
                     df_profiles = pd.DataFrame(list(profiles_cursor))
                     
                     if not df_profiles.empty:
                         df_profiles['_id'] = df_profiles['_id'].astype(str)
                         
-                        # دمج الجدولين (Transactions + Profiles)
                         merged_df = pd.merge(
                             df_trans, 
                             df_profiles, 
@@ -308,7 +291,6 @@ else:
                             suffixes=('_trans', '_orig')
                         )
                         
-                        # 3. فلتر الماسح الميداني (Extra Filter)
                         surveyor_col = get_surveyor_column(merged_df)
                         if surveyor_col:
                             all_surveyors = ["All"] + list(merged_df[surveyor_col].astype(str).unique())
@@ -317,17 +299,14 @@ else:
                             if sel_surveyor != "All":
                                 merged_df = merged_df[merged_df[surveyor_col].astype(str) == sel_surveyor]
                         
-                        # تنظيف العرض
                         st.markdown(f"**Total Records:** `{len(merged_df)}`")
                         
-                        # تحديد الأعمدة المهمة للعرض (أولاً أعمدة الصرف، ثم الباقي)
                         cols = ['timestamp', 'location', 'distributor', 'beneficiary_name']
                         remaining_cols = [c for c in merged_df.columns if c not in cols and c not in ['_id', '_id_trans', '_id_orig', 'qr_code']]
                         final_view = merged_df[cols + remaining_cols]
                         
                         st.dataframe(final_view, use_container_width=True)
                         
-                        # تحميل كامل البيانات
                         buffer = io.BytesIO()
                         with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
                             final_view.to_excel(writer, index=False, sheet_name='Full_Report')
